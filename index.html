@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -446,6 +447,7 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
 .proof-gate{background:linear-gradient(135deg,#FFF0F0,#fff);border-color:#E53935}.proof-gate-title{color:#B71C1C}.step-circle.active{background:#E53935;border-color:#E53935;box-shadow:0 0 0 5px rgba(229,57,53,.14)}.step-label.active{color:#E53935}.rs-dot.drop{background:#FFF0F0;color:#E53935;border-color:#E53935}.toast-pop.info{background:#121212}
 @media(min-width:850px){.screen{max-width:760px;margin:0 auto;box-shadow:0 0 0 1px rgba(18,18,18,.04),0 24px 80px rgba(18,18,18,.08)}#screen-login{max-width:none}.login-wrap{max-width:460px}}
 </style>
+<link rel="stylesheet" href="nexcart-notifications.css">
 </head>
 <body>
 
@@ -454,7 +456,7 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
   <div class="reject-sheet">
     <div class="rs-handle"></div>
     <div class="rs-title">Why are you rejecting this order?</div>
-    <div class="rs-sub">Your reason helps vendors and the system improve. The order will be transferred to another nearby partner.</div>
+    <div class="rs-sub">Your reason helps the vendor improve fulfilment. The order will return to the vendor for secure reassignment.</div>
 
     <div class="reason-grid" id="reason-grid">
       <button class="reason-btn" onclick="selectReason('too_far','📍','Too Far Away','Shop/drop location too far')">
@@ -479,14 +481,14 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
 
     <textarea class="reason-other" id="reason-other" placeholder="Describe your reason…" rows="2"></textarea>
 
-    <div class="transfer-section">
+    <div class="transfer-section" style="display:none">
       <div class="ts-title">🔄 Transfer to Nearby Partner</div>
       <div class="ts-partners" id="ts-partners-list">
         <div class="ts-empty">⏳ Loading nearby partners…</div>
       </div>
     </div>
 
-    <button class="btn-confirm-reject" id="btn-confirm-reject" onclick="confirmReject()" disabled>Reject &amp; Transfer Order</button>
+    <button class="btn-confirm-reject" id="btn-confirm-reject" onclick="confirmReject()" disabled>Reject &amp; Return to Vendor</button>
     <button class="btn-cancel-reject" onclick="closeRejectModal()">Cancel — Keep this order</button>
   </div>
 </div>
@@ -521,6 +523,11 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
         <div class="form-g"><label class="form-l">Last Name</label><input class="form-i" id="reg-lname" placeholder="Kumar"></div>
       </div>
       <div class="form-g"><label class="form-l">Phone Number *</label><input class="form-i" id="reg-phone" type="tel" placeholder="+91 98765 43210" maxlength="15"></div>
+      <div class="form-g"><label class="form-l">Email Address *</label><input class="form-i" id="reg-email" type="email" autocomplete="email" placeholder="partner@example.com"></div>
+      <div class="form-row">
+        <div class="form-g"><label class="form-l">Create Password *</label><input class="form-i" id="reg-password" type="password" autocomplete="new-password" placeholder="Minimum 6 characters"></div>
+        <div class="form-g"><label class="form-l">Confirm Password *</label><input class="form-i" id="reg-confirm" type="password" autocomplete="new-password" placeholder="Repeat password"></div>
+      </div>
       <div class="form-g"><label class="form-l">Vehicle Type</label>
         <div class="vehicle-grid">
           <button class="veh-btn selected" onclick="selectVehicle('bicycle',this)"><div class="vi">🚲</div><div class="vl">Bicycle</div></button>
@@ -535,7 +542,8 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
     <div class="login-card hidden" id="login-card">
       <div class="lc-title">👋 Welcome Back!</div>
       <div class="login-err" id="login-err"></div>
-      <div class="form-g"><label class="form-l">Phone Number</label><input class="form-i" id="login-phone" type="tel" placeholder="+91 98765 43210"></div>
+      <div class="form-g"><label class="form-l">Email Address</label><input class="form-i" id="login-email" type="email" autocomplete="email" placeholder="partner@example.com"></div>
+      <div class="form-g"><label class="form-l">Password</label><input class="form-i" id="login-password" type="password" autocomplete="current-password" placeholder="Enter your password" onkeydown="if(event.key==='Enter')loginPartner()"></div>
       <button class="btn-login" onclick="loginPartner()">Sign In &amp; Continue →</button>
       <div class="login-switch" style="color:rgba(255,255,255,.5)">New partner? <a onclick="showRegister()">Register here →</a></div>
     </div>
@@ -784,7 +792,9 @@ firebase.initializeApp({
   appId:"1:868851396316:web:951e1988f3f2e4b065ce19",
   measurementId:"G-NPMLZ054G8"
 });
-const db = firebase.firestore();
+const db = firebase.firestore(),auth=firebase.auth();
+async function ensurePartnerAuth(){if(auth.currentUser)return auth.currentUser;throw new Error('Please sign in with your delivery partner email and password.');}
+function partnerAuthMessage(e){const code=e&&e.code||'';if(code==='auth/email-already-in-use')return'An account already exists for this email. Sign in instead.';if(code==='auth/invalid-email')return'Enter a valid email address.';if(code==='auth/weak-password')return'Use a password with at least 6 characters.';if(code==='auth/user-not-found'||code==='auth/wrong-password'||code==='auth/invalid-credential')return'Incorrect email or password.';if(code==='auth/too-many-requests')return'Too many attempts. Wait a moment and try again.';if(code==='auth/network-request-failed')return'Network unavailable. Check your internet connection.';return(e&&e.message||'Authentication failed').replace('Firebase: ','');}
 
 const save=(k,v)=>{try{localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v));}catch(e){}};
 const load=(k,def='')=>{try{const v=localStorage.getItem(k);return v!=null?v:def;}catch(e){return def;}};
@@ -793,6 +803,7 @@ const loadJ=(k,def=null)=>{try{const v=localStorage.getItem(k);return v?JSON.par
 let _partner=loadJ('ls_dp_profile');
 let _isOnline=false;
 let _partnerLat=null,_partnerLng=null;
+let _lastLocationPush=0;
 let _activeOrder=null;
 let _deliveryStep=0;
 let _handoverListener=null;
@@ -809,6 +820,7 @@ let _partnerWatcher=null;
 let _locWatcher=null;
 let _assignedOrder=null;
 let _deliveredOrderListener=null;
+let _creatingPartnerAccount=false;
 
 // Reject modal state
 let _rejectOrderId=null;
@@ -913,41 +925,48 @@ async function registerPartner(){
   const fname=document.getElementById('reg-fname').value.trim();
   const lname=document.getElementById('reg-lname').value.trim();
   const phone=document.getElementById('reg-phone').value.trim();
+  const email=document.getElementById('reg-email').value.trim().toLowerCase();
+  const password=document.getElementById('reg-password').value;
+  const confirmPassword=document.getElementById('reg-confirm').value;
   const errEl=document.getElementById('reg-err');
   if(!fname||!lname){errEl.textContent='Please enter your full name.';errEl.classList.add('show');return;}
   if(!phone||phone.length<8){errEl.textContent='Enter a valid phone number.';errEl.classList.add('show');return;}
+  if(!/^\S+@\S+\.\S+$/.test(email)){errEl.textContent='Enter a valid email address.';errEl.classList.add('show');return;}
+  if(password.length<6){errEl.textContent='Password must contain at least 6 characters.';errEl.classList.add('show');return;}
+  if(password!==confirmPassword){errEl.textContent='Passwords do not match.';errEl.classList.add('show');return;}
   errEl.classList.remove('show');
-  const existing=await db.collection('delivery_partners').where('phone','==',phone).get();
-  if(!existing.empty){const doc=existing.docs[0];_partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));toast('Welcome back, '+_partner.firstName+'!');loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');return;}
-  const profile={firstName:fname,lastName:lname,phone,vehicle:_selectedVehicle,photo:_photoDataURL,rating:5.0,completedOrders:0,totalEarnings:0,isOnline:false,proofStatus:'pending',lat:null,lng:null,activeOrderId:null,joinedAt:new Date().toISOString()};
-  try{const ref=await db.collection('delivery_partners').add(profile);_partner={id:ref.id,...profile};save('ls_dp_profile',JSON.stringify(_partner));toast('Account created. Please upload your proofs first.');loadDashboard();showScreen('dashboard');showDashPanel('docs');}
-  catch(e){errEl.textContent='Error: '+e.message;errEl.classList.add('show');}
+  let createdUser=null;
+  try{_creatingPartnerAccount=true;const cred=await auth.createUserWithEmailAndPassword(email,password);createdUser=cred.user;await cred.user.updateProfile({displayName:fname+' '+lname});const profile={uid:cred.user.uid,firstName:fname,lastName:lname,email,phone,vehicle:_selectedVehicle,photo:_photoDataURL,rating:5.0,completedOrders:0,totalEarnings:0,isOnline:false,accountStatus:'active',proofStatus:'pending',lat:null,lng:null,activeOrderId:null,joinedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await db.collection('delivery_partners').doc(cred.user.uid).set(profile);_partner={id:cred.user.uid,...profile};save('ls_dp_profile',JSON.stringify(_partner));toast('Account created successfully.');loadDashboard();showScreen('dashboard');showDashPanel('docs');}
+  catch(e){if(createdUser)await createdUser.delete().catch(()=>auth.signOut());errEl.textContent=partnerAuthMessage(e);errEl.classList.add('show');}
+  finally{_creatingPartnerAccount=false;}
 }
 
 async function loginPartner(){
-  const phone=document.getElementById('login-phone').value.trim();
+  const email=document.getElementById('login-email').value.trim().toLowerCase();
+  const password=document.getElementById('login-password').value;
   const errEl=document.getElementById('login-err');
-  if(!phone){errEl.textContent='Enter your phone number.';errEl.classList.add('show');return;}
+  if(!email||!password){errEl.textContent='Enter your email address and password.';errEl.classList.add('show');return;}
   errEl.classList.remove('show');
   try{
-    const snap=await db.collection('delivery_partners').where('phone','==',phone).get();
-    if(snap.empty){errEl.textContent='No account found. Please register.';errEl.classList.add('show');return;}
-    const doc=snap.docs[0];_partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));
+    const cred=await auth.signInWithEmailAndPassword(email,password),doc=await db.collection('delivery_partners').doc(cred.user.uid).get();
+    if(!doc.exists){await auth.signOut();errEl.textContent='This account is not registered as a delivery partner.';errEl.classList.add('show');return;}
+    if(doc.data().accountStatus==='disabled'){await auth.signOut();errEl.textContent='This delivery partner account has been disabled.';errEl.classList.add('show');return;}
+    _partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));
     toast('Welcome back, '+_partner.firstName+'!');loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');
-  }catch(e){errEl.textContent='Error: '+e.message;errEl.classList.add('show');}
+  }catch(e){errEl.textContent=partnerAuthMessage(e);errEl.classList.add('show');}
 }
 
-function logout(){
+async function logout(){
   if(_isOnline)setOnlineStatus(false);
   stopListeners();
   _partner=null;_isOnline=false;_assignedOrder=null;
   localStorage.removeItem('ls_dp_profile');
+  await auth.signOut().catch(()=>{});
   showScreen('login');
 }
 
-if(_partner){
-  setTimeout(()=>{loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');if(_partner.isOnline&&hasRequiredProofs()){const tog=document.getElementById('online-toggle');if(tog)tog.checked=true;}},50);
-}
+async function restorePartnerSession(user){try{if(!user){_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}if(user.isAnonymous){await auth.signOut();_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}const doc=await db.collection('delivery_partners').doc(user.uid).get();if(!doc.exists||doc.data().accountStatus==='disabled'){await auth.signOut();_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}_partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');if(_partner.isOnline&&hasRequiredProofs()){const tog=document.getElementById('online-toggle');if(tog)tog.checked=true;}}catch(e){console.warn('Partner session:',e.message);_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');}}
+auth.onAuthStateChanged(user=>{if(!_creatingPartnerAccount)restorePartnerSession(user);});
 
 function loadDashboard(){
   if(!_partner)return;
@@ -1005,6 +1024,10 @@ function startLocationTracking(){
   _locWatcher=navigator.geolocation.watchPosition(pos=>{
     _partnerLat=pos.coords.latitude;_partnerLng=pos.coords.longitude;
     if(_isOnline&&_partner)db.collection('delivery_partners').doc(_partner.id).update({lat:_partnerLat,lng:_partnerLng}).catch(()=>{});
+    if(_activeOrder&&Date.now()-_lastLocationPush>=5000){
+      _lastLocationPush=Date.now();
+      db.collection('orders').doc(_activeOrder.id).update({riderLat:_partnerLat,riderLng:_partnerLng,riderLocationAccuracy:Math.round(pos.coords.accuracy||0),riderLocationUpdatedAt:new Date().toISOString()}).catch(()=>{});
+    }
     if(_delMap&&_riderMarker)_riderMarker.setLatLng([_partnerLat,_partnerLng]);
   },()=>{_partnerLat=11.0168;_partnerLng=76.9558;},{enableHighAccuracy:true,timeout:10000,maximumAge:5000});
 }
@@ -1015,17 +1038,18 @@ function listenAssignedOrders(){
   if(_assignedListener){_assignedListener();_assignedListener=null;}
   _assignedListener=db.collection('orders')
     .where('deliveryPartnerId','==',_partner.id)
-    .where('status','==','Ready for Pickup')
     .onSnapshot(snap=>{
-      if(!snap.empty&&!_activeOrder){
+      const readyDocs=[];
+      snap.forEach(d=>{const o={id:d.id,...d.data()};if(o.status==='Ready for Pickup')readyDocs.push(o);});
+      if(readyDocs.length&&!_activeOrder){
         const docs=[];snap.forEach(d=>docs.push({id:d.id,...d.data()}));
-        docs.sort((a,b)=>new Date(b.assignedAt||b.orderedAt)-new Date(a.assignedAt||a.orderedAt));
-        const newest=docs[0];
+        readyDocs.sort((a,b)=>new Date(b.assignedAt||b.orderedAt)-new Date(a.assignedAt||a.orderedAt));
+        const newest=readyDocs[0];
         if(!_assignedOrder||_assignedOrder.id!==newest.id){
           _assignedOrder=newest;
           renderAssignedBanner(newest);
         }
-      }else if(snap.empty){
+      }else if(!readyDocs.length){
         _assignedOrder=null;
         document.getElementById('assigned-banner-wrap').innerHTML='';
       }
@@ -1085,7 +1109,7 @@ window.acceptAssignedOrder=async(orderId)=>{
   const order=_assignedOrder;
   if(!order||order.id!==orderId)return;
   try{
-    await db.collection('orders').doc(orderId).update({status:'Picked Up',pickedUpAt:new Date().toISOString()});
+    await db.collection('orders').doc(orderId).update({status:'Ready for Pickup',acceptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
     await db.collection('delivery_partners').doc(_partner.id).update({activeOrderId:orderId});
     _activeOrder={...order};
     _assignedOrder=null;
@@ -1264,23 +1288,24 @@ window.confirmReject=async()=>{
   }
 };
 
+/* Secure rejection: return to the owning vendor, who selects the next rider. */
+window.confirmReject=async()=>{
+  if(!_rejectOrderId||!_selectedReason)return;
+  const btn=document.getElementById('btn-confirm-reject'),reasonText=_selectedReason==='other'?(document.getElementById('reason-other').value.trim()||'Other reason'):{too_far:'Too far away',busy:'Already busy',vehicle:'Vehicle issue',personal:'Personal reason',area:'Unknown area'}[_selectedReason]||_selectedReason;
+  btn.disabled=true;btn.textContent='Returning to vendor...';
+  try{
+    await db.collection('orders').doc(_rejectOrderId).update({deliveryPartnerId:null,deliveryPartnerUid:null,deliveryPartnerName:null,deliveryPartnerPhone:null,deliveryPartnerVehicle:null,deliveryPartnerVehicleEmoji:null,status:'Packed',assignedAt:null,updatedAt:new Date().toISOString(),rejectionLog:firebase.firestore.FieldValue.arrayUnion({rejectedBy:_partner.id,rejectedByName:(_partner.firstName+' '+_partner.lastName).trim(),reason:reasonText,reasonCode:_selectedReason,rejectedAt:new Date().toISOString()})});
+    await db.collection('delivery_partners').doc(_partner.id).update({activeOrderId:null,lastRejectionReason:reasonText,lastRejectionAt:new Date().toISOString(),rejectionCount:firebase.firestore.FieldValue.increment(1)});
+    _assignedOrder=null;document.getElementById('assigned-banner-wrap').innerHTML='';closeRejectModal();toast('Order returned to vendor for reassignment','info');
+  }catch(e){btn.disabled=false;btn.textContent='Reject & Return to Vendor';toast('Rejection failed: '+e.message,'err');}
+};
+
 function listenAvailableOrders(){
   if(_ordersListener){_ordersListener();_ordersListener=null;}
-  _ordersListener=db.collection('orders').where('status','==','Confirmed')
-    .onSnapshot(snap=>{
-      const orders=[];
-      snap.forEach(d=>{const o={id:d.id,...d.data()};if(!o.deliveryPartnerId)orders.push(o);});
-      if(_partnerLat&&_partnerLng){
-        orders.sort((a,b)=>{
-          const dA=haversine(_partnerLat,_partnerLng,a.shopLat||11.02,a.shopLng||76.96);
-          const dB=haversine(_partnerLat,_partnerLng,b.shopLat||11.02,b.shopLng||76.96);
-          return dA-dB;
-        });
-      }
-      _availOrders=orders;
-      document.getElementById('avail-count-badge').textContent=orders.length+' nearby';
-      renderOrdersQueue(orders);
-    },e=>console.error(e));
+  _availOrders=[];
+  document.getElementById('avail-count-badge').textContent='Direct assignments';
+  const el=document.getElementById('orders-queue');
+  if(el)el.innerHTML='<div class="no-orders"><div class="no-ic">DP</div><div class="no-t">Waiting for a Vendor Assignment</div><div class="no-s">For customer privacy, only orders assigned directly to your account will appear here.</div></div>';
 }
 function stopOrdersListener(){if(_ordersListener){_ordersListener();_ordersListener=null;}}
 function stopListeners(){
@@ -1624,8 +1649,8 @@ async function cancelDelivery(){
   if(!_activeOrder)return;
   if(!confirm('Cancel this delivery? Order will go back to vendor.'))return;
   await db.collection('orders').doc(_activeOrder.id).update({
-    deliveryPartnerId:null,deliveryPartnerName:null,deliveryPartnerPhone:null,
-    status:'Packed',acceptedAt:null
+    deliveryPartnerId:null,deliveryPartnerUid:null,deliveryPartnerName:null,deliveryPartnerPhone:null,
+    deliveryPartnerVehicle:null,deliveryPartnerVehicleEmoji:null,status:'Packed',acceptedAt:null,assignedAt:null,updatedAt:new Date().toISOString()
   });
   await db.collection('delivery_partners').doc(_partner.id).update({activeOrderId:null});
   _activeOrder=null;_deliveryStep=0;
@@ -1675,5 +1700,6 @@ function spawnConfetti(){
 
 function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
 </script>
+<script src="nexcart-notifications.js"></script>
 </body>
 </html>
