@@ -764,7 +764,7 @@ body{background:radial-gradient(circle at 90% 0,rgba(229,57,53,.09),transparent 
     <!-- Customer confirmation status on delivered screen -->
     <div class="customer-confirm-status" id="customer-confirm-status">
       <div class="ccs-title" id="ccs-title">⏳ Waiting for customer confirmation…</div>
-      <div class="ccs-sub" id="ccs-sub">The customer will confirm receipt on their app. You can proceed while they do.</div>
+      <div class="ccs-sub" id="ccs-sub">The customer must confirm receipt before this order can close or another order can be accepted.</div>
     </div>
 
     <div class="del-earn-card">
@@ -808,6 +808,7 @@ let _activeOrder=null;
 let _deliveryStep=0;
 let _handoverListener=null;
 let _deliveryFinalized=false;
+let _restoringActiveOrder=false;
 let _selectedVehicle='bicycle';
 let _photoDataURL='';
 let _todayEarnings=parseFloat(load('ls_dp_earn_today','0'));
@@ -830,6 +831,15 @@ let _nearbyPartnersForTransfer=[];
 
 let _delMap=null;
 let _riderMarker=null,_shopMarker=null,_destMarker=null,_routeLine=null;
+
+function confirmationPending(){return !!(_activeOrder&&!_deliveryFinalized&&(_activeOrder.deliveryAwaitingCustomer===true||_activeOrder.riderMarkedDeliveredAt));}
+function setConfirmationLockUI(locked){
+  const next=document.querySelector('.btn-next-order'),back=document.querySelector('.btn-back-dash'),inline=document.querySelector('.btn-next-order-inline'),cancel=document.getElementById('cancel-delivery-btn');
+  [next,back,inline,cancel].forEach(btn=>{if(btn){btn.disabled=locked;btn.style.opacity=locked?'.45':'';btn.style.cursor=locked?'not-allowed':'';}});
+  if(next)next.textContent=locked?'Waiting for Customer Confirmation':'Get Next Order';
+  if(back)back.textContent=locked?'Order Cannot Be Closed Yet':'Back to Dashboard';
+}
+function requireCustomerConfirmation(){if(!confirmationPending())return true;toast('Customer confirmation is required before closing this order or receiving another order.','err');setConfirmationLockUI(true);return false;}
 
 const toast=(m,t='')=>{const e=document.getElementById('toast');e.textContent=m;e.className='toast-pop show'+(t?' '+t:'');setTimeout(()=>e.className='toast-pop',3200);};
 function haversine(la1,ln1,la2,ln2){const R=6371,dLat=(la2-la1)*Math.PI/180,dLng=(ln2-ln1)*Math.PI/180;const a=Math.sin(dLat/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
@@ -912,7 +922,7 @@ function uploadProof(event,key){
   updatePartnerPanels();
   toast(hasRequiredProofs()?'All proofs uploaded. You can go online now.':'Proof uploaded. Upload remaining proofs.','info');
 }
-function toggleBreakMode(){const next=!(load('ls_dp_break','false')==='true');save('ls_dp_break',next?'true':'false');if(next&&_isOnline){const t=document.getElementById('online-toggle');if(t)t.checked=false;toggleOnline();}updatePartnerPanels();toast(next?'Break started':'Break ended','info');}
+function toggleBreakMode(){const next=!(load('ls_dp_break','false')==='true');if(next&&confirmationPending()){requireCustomerConfirmation();return;}save('ls_dp_break',next?'true':'false');if(next&&_isOnline){const t=document.getElementById('online-toggle');if(t)t.checked=false;toggleOnline();}updatePartnerPanels();toast(next?'Break started':'Break ended','info');}
 function resetTodayStats(){if(!confirm('Reset today earnings, deliveries, and distance on this device?'))return;_todayEarnings=0;_todayOrders=0;_todayKm=0;save('ls_dp_earn_today','0');save('ls_dp_orders_today','0');save('ls_dp_km_today','0');updateStats();toast('Today reset','info');}
 
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById('screen-'+id).classList.add('active');window.scrollTo(0,0);}
@@ -957,6 +967,7 @@ async function loginPartner(){
 }
 
 async function logout(){
+  if(!requireCustomerConfirmation())return;
   if(_isOnline)setOnlineStatus(false);
   stopListeners();
   _partner=null;_isOnline=false;_assignedOrder=null;
@@ -983,6 +994,17 @@ function loadDashboard(){
   if(_partnerWatcher)_partnerWatcher();
   _partnerWatcher=db.collection('delivery_partners').doc(_partner.id).onSnapshot(snap=>{if(!snap.exists)return;_partner={id:snap.id,...snap.data()};save('ls_dp_profile',JSON.stringify(_partner));});
   renderCompletedList();
+  restoreActiveDelivery();
+}
+
+async function restoreActiveDelivery(){
+  if(_restoringActiveOrder||!_partner||!_partner.activeOrderId||_activeOrder)return;
+  _restoringActiveOrder=true;
+  try{const snap=await db.collection('orders').doc(_partner.activeOrderId).get();if(!snap.exists)return;const order={id:snap.id,...snap.data()};if(order.deliveryPartnerId!==_partner.id&&order.deliveryPartnerUid!==_partner.id)return;_activeOrder=order;
+    if(order.deliveryAwaitingCustomer&&order.customerConfirmed!==true){_deliveryFinalized=false;document.getElementById('del-earn-val').textContent=money(calcEarnings(order));document.getElementById('del-total-earn').textContent='Pending';document.getElementById('del-total-orders').textContent=_todayOrders;document.getElementById('customer-confirm-status').classList.add('show');document.getElementById('ccs-title').textContent='Waiting for customer confirmation';document.getElementById('ccs-sub').textContent='This order stays locked until the customer confirms receipt.';setConfirmationLockUI(true);startListeningForCustomerConfirmation(order.id);showScreen('delivered');return;}
+    if(order.customerConfirmed===true){_activeOrder.customerConfirmed=true;_activeOrder.deliveryAwaitingCustomer=false;await finalizeConfirmedDelivery();setConfirmationLockUI(false);showScreen('delivered');return;}
+    showActiveDelivery(order,true);
+  }catch(e){console.warn('Restore active delivery:',e.message);toast('Could not restore active order: '+e.message,'err');}finally{_restoringActiveOrder=false;}
 }
 
 function updateStats(){
@@ -994,6 +1016,7 @@ function updateStats(){
 
 function toggleOnline(){
   const on=document.getElementById('online-toggle').checked;
+  if(!on&&confirmationPending()){document.getElementById('online-toggle').checked=true;requireCustomerConfirmation();return;}
   if(on&&!hasRequiredProofs()){
     document.getElementById('online-toggle').checked=false;
     setOnlineUI(false);
@@ -1107,6 +1130,7 @@ function renderAssignedBanner(order){
 
 window.acceptAssignedOrder=async(orderId)=>{
   const order=_assignedOrder;
+  if(_activeOrder){toast('Complete the active delivery before accepting another order.','err');return;}
   if(!order||order.id!==orderId)return;
   try{
     await db.collection('orders').doc(orderId).update({status:'Ready for Pickup',acceptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
@@ -1555,6 +1579,7 @@ window.whatsappCustomer=()=>{const phone=window._notifyPhone;const msg=window._n
 
 async function markDelivered(){
   if(!_activeOrder||!_partner)return;
+  if(_activeOrder.deliveryAwaitingCustomer){toast('Customer confirmation is already pending.','info');setConfirmationLockUI(true);return;}
   const earn=calcEarnings(_activeOrder);
   const km=haversine(_activeOrder.shopLat||11.02,_activeOrder.shopLng||76.96,_activeOrder.deliveryLat||11.0168,_activeOrder.deliveryLng||76.9558);
   const now=new Date().toISOString();
@@ -1563,6 +1588,7 @@ async function markDelivered(){
     status:'Out for Delivery',deliveryAwaitingCustomer:true,
     riderMarkedDeliveredAt:now,updatedAt:now
   });
+  _activeOrder.deliveryAwaitingCustomer=true;_activeOrder.riderMarkedDeliveredAt=now;setConfirmationLockUI(true);
   document.getElementById('del-earn-val').textContent='₹'+earn;
   document.getElementById('del-total-earn').textContent='Pending';
   document.getElementById('del-total-orders').textContent=_todayOrders;
@@ -1601,8 +1627,7 @@ function startListeningForCustomerConfirmation(orderId){
   });
 }
 
-function onCustomerConfirmed(received){
-  if(_deliveredOrderListener){_deliveredOrderListener();_deliveredOrderListener=null;}
+async function onCustomerConfirmed(received){
   // Update waiting banner on active screen (if still visible)
   const cwbStatus=document.getElementById('cwb-status');
   const cwbConfirmed=document.getElementById('cwb-confirmed');
@@ -1619,25 +1644,27 @@ function onCustomerConfirmed(received){
     document.getElementById('ccs-sub').textContent=received?'Great job! The order is officially complete.':'Admin has been notified. Keep delivering great service!';
   }
   if(received){
-    finalizeConfirmedDelivery();
+    _activeOrder.customerConfirmed=true;_activeOrder.deliveryAwaitingCustomer=false;await finalizeConfirmedDelivery();if(_deliveredOrderListener){_deliveredOrderListener();_deliveredOrderListener=null;}setConfirmationLockUI(false);
     toast('🎉 Customer confirmed receipt! Order 100% complete.');
     if('vibrate' in navigator)navigator.vibrate([100,50,100]);
   }else{
+    if(_activeOrder){_activeOrder.customerConfirmed=false;_activeOrder.deliveryAwaitingCustomer=true;}setConfirmationLockUI(true);
     toast('⚠️ Customer reported an issue. Admin notified.','info');
   }
 }
 
 async function finalizeConfirmedDelivery(){
- if(_deliveryFinalized||!_activeOrder||!_partner)return;_deliveryFinalized=true;
+ if(_deliveryFinalized||!_activeOrder||!_partner)return;
  const earn=calcEarnings(_activeOrder),km=haversine(_activeOrder.shopLat||11.02,_activeOrder.shopLng||76.96,_activeOrder.deliveryLat||11.0168,_activeOrder.deliveryLng||76.9558),now=new Date().toISOString();
  _todayEarnings=Math.round(_todayEarnings+earn);_todayOrders++;_todayKm=Math.round((_todayKm+km)*10)/10;
  save('ls_dp_earn_today',_todayEarnings+'');save('ls_dp_orders_today',_todayOrders+'');save('ls_dp_km_today',_todayKm+'');
  await db.collection('delivery_partners').doc(_partner.id).update({totalEarnings:firebase.firestore.FieldValue.increment(earn),completedOrders:firebase.firestore.FieldValue.increment(1),activeOrderId:null});
- const completed=loadJ('ls_dp_completed')||[];completed.push({..._activeOrder,deliveredAt:now,partnerEarnings:earn});save('ls_dp_completed',JSON.stringify(completed));
+ const completed=loadJ('ls_dp_completed')||[];completed.push({..._activeOrder,deliveredAt:now,partnerEarnings:earn});save('ls_dp_completed',JSON.stringify(completed));_deliveryFinalized=true;
  document.getElementById('del-total-earn').textContent='₹'+_todayEarnings;document.getElementById('del-total-orders').textContent=_todayOrders;updateStats();
 }
 
 function proceedAfterConfirmation(){
+  if(!_deliveryFinalized||!_activeOrder||_activeOrder.customerConfirmed!==true){requireCustomerConfirmation();return;}
   _activeOrder=null;_deliveryStep=0;
   document.getElementById('customer-waiting-banner').classList.remove('show');
   document.getElementById('cwb-confirmed').classList.remove('show');
@@ -1647,6 +1674,7 @@ function proceedAfterConfirmation(){
 
 async function cancelDelivery(){
   if(!_activeOrder)return;
+  if(!requireCustomerConfirmation())return;
   if(!confirm('Cancel this delivery? Order will go back to vendor.'))return;
   await db.collection('orders').doc(_activeOrder.id).update({
     deliveryPartnerId:null,deliveryPartnerUid:null,deliveryPartnerName:null,deliveryPartnerPhone:null,
@@ -1661,11 +1689,13 @@ async function cancelDelivery(){
 }
 
 function goToDash(){
+  if(!requireCustomerConfirmation())return;
   hideNotifyPanel();
   document.getElementById('normal-action-bar').classList.remove('hidden');
   showScreen('dashboard');updateStats();renderCompletedList();
 }
 function nextOrder(){
+  if(!_deliveryFinalized||!_activeOrder||_activeOrder.customerConfirmed!==true){requireCustomerConfirmation();return;}
   _activeOrder=null;_deliveryStep=0;
   if(_deliveredOrderListener){_deliveredOrderListener();_deliveredOrderListener=null;}
   goToDash();setTimeout(()=>window.scrollTo({top:0,behavior:'smooth'}),200);
