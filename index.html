@@ -649,7 +649,6 @@ body{background:radial-gradient(circle at 90% 0,rgba(243,53,32,.09),transparent 
       <div class="pc-sub">Keep these ready so vendors and customers can trust your profile.</div>
       <div class="doc-row"><div class="row-main"><div class="row-title">Identity Proof</div><div class="row-sub" id="doc-id-sub">Aadhaar, PAN, or government ID.</div></div><div class="proof-upload"><span class="proof-name" id="doc-id-name"></span><input class="proof-file" id="doc-id-file" type="file" accept="image/*,.pdf" onchange="uploadProof(event,'idProof')"><button class="mini-btn" onclick="document.getElementById('doc-id-file').click()">Upload</button></div></div>
       <div class="doc-row"><div class="row-main"><div class="row-title">Driving Licence</div><div class="row-sub" id="doc-license-sub">Required for bike or car deliveries.</div></div><div class="proof-upload"><span class="proof-name" id="doc-license-name"></span><input class="proof-file" id="doc-license-file" type="file" accept="image/*,.pdf" onchange="uploadProof(event,'license')"><button class="mini-btn" onclick="document.getElementById('doc-license-file').click()">Upload</button></div></div>
-      <div class="doc-row"><div class="row-main"><div class="row-title">Vehicle RC / Cycle Declaration</div><div class="row-sub" id="doc-vehicle-sub">Vehicle ownership or bicycle self declaration.</div></div><div class="proof-upload"><span class="proof-name" id="doc-vehicle-name"></span><input class="proof-file" id="doc-vehicle-file" type="file" accept="image/*,.pdf" onchange="uploadProof(event,'vehicleDoc')"><button class="mini-btn" onclick="document.getElementById('doc-vehicle-file').click()">Upload</button></div></div>
     </div>
   </div>
 
@@ -852,7 +851,7 @@ const vehicleEmoji=v=>({'bicycle':'🚲','bike':'🛵','car':'🚗'}[v]||'🛵')
 function money(n){return 'Rs. '+Math.round(Number(n)||0);}
 function hasRequiredProofs(){
   const docs=loadJ('ls_dp_docs',{})||{};
-  return !!(docs.idProof&&docs.license&&docs.vehicleDoc);
+  return !!(docs.idProof&&docs.license);
 }
 function showDashPanel(name){
   document.querySelectorAll('.dash-panel').forEach(p=>p.classList.remove('active'));
@@ -885,10 +884,8 @@ function updatePartnerPanels(){
   const payoutBtn=document.getElementById('payout-btn');if(payoutBtn)payoutBtn.disabled=balance<200;
   set('doc-id-sub',docs.idProof?'Ready for review':'Aadhaar, PAN, or government ID.');
   set('doc-license-sub',docs.license?'Ready for review':'Required for bike or car deliveries.');
-  set('doc-vehicle-sub',docs.vehicleDoc?'Ready for review':'Vehicle ownership or bicycle self declaration.');
   set('doc-id-name',docs.idProofName||'');
   set('doc-license-name',docs.licenseName||'');
-  set('doc-vehicle-name',docs.vehicleDocName||'');
   const proofReady=hasRequiredProofs();
   const gate=document.getElementById('proof-gate');
   if(gate)gate.classList.toggle('show',!proofReady);
@@ -1747,5 +1744,7 @@ function spawnConfetti(){
 function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
 </script>
 <script src="nexcart-notifications.js"></script>
+<style id="zorra-embedded-brand">.logo::before{background-image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIyIiBmaWxsPSIjMDcxQTNEIi8+PHBhdGggZD0iTTE3IDM1aDIzTTEyIDQ3aDIzTTggNTloMjMiIHN0cm9rZT0iI0YzMzUyMCIgc3Ryb2tlLXdpZHRoPSI2IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48cGF0aCBkPSJNMzkgMjFoNDNMNTUgNTBoMjVMMzcgODJoLTE3bDI3LTI1SDI4bDMyLTI3SDM5eiIgZmlsbD0id2hpdGUiLz48cGF0aCBkPSJNMjcgNzhoNDgiIHN0cm9rZT0iI0YzMzUyMCIgc3Ryb2tlLXdpZHRoPSI1IiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48Y2lyY2xlIGN4PSI0MyIgY3k9Ijg3IiByPSI1IiBmaWxsPSIjRjMzNTIwIi8+PGNpcmNsZSBjeD0iNjYiIGN5PSI4NyIgcj0iNSIgZmlsbD0iI0YzMzUyMCIvPjwvc3ZnPg==")!important;background-position:center!important;background-size:cover!important;background-repeat:no-repeat!important}</style>
+<style id="zorra-supplied-logo-final">.logo::before{background:url("zorra-logo.jpeg") center/cover no-repeat!important}</style>
 </body>
 </html>
