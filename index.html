@@ -1796,5 +1796,16 @@ function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
   document.querySelectorAll('.top .brand').forEach(function(el){var old=el.querySelector('img');if(old)old.remove();el.querySelectorAll('.zorra-inline-svg').forEach(function(x){x.remove();});if(!el.querySelector('.zorra-exact-logo'))el.insertAdjacentHTML('afterbegin',image);});
 })();
 </script>
+<style id="zorra-delivery-proof-css">
+.zdp-card{margin:14px 0;padding:14px;border:1px solid #cbd5e1;border-radius:14px;background:#fff}.zdp-card label{display:block;font-weight:800;font-size:.84rem;margin-bottom:5px}.zdp-card p{font-size:.72rem;color:#64748b;line-height:1.4;margin-bottom:9px}.zdp-card input{display:block;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:10px}.zdp-preview{display:none;width:100%;max-height:180px;object-fit:cover;border-radius:10px;margin-top:10px}
+</style>
+<script id="zorra-delivery-proof-js">
+(function(){
+ function addUI(){var btn=document.querySelector('.btn-cnp-confirm');if(!btn||document.getElementById('zdp-proof'))return;var card=document.createElement('div');card.className='zdp-card';card.innerHTML='<label for="zdp-proof">Delivery photo required</label><p>Take or choose a clear photo showing the order delivered safely. The admin can review it.</p><input id="zdp-proof" type="file" accept="image/*" capture="environment"><img id="zdp-preview" class="zdp-preview" alt="Delivery proof preview">';btn.parentNode.insertBefore(card,btn);card.querySelector('input').addEventListener('change',function(){var f=this.files[0],img=document.getElementById('zdp-preview');if(f){img.src=URL.createObjectURL(f);img.style.display='block';}});}
+ function compress(file){return new Promise(function(resolve,reject){var r=new FileReader();r.onload=function(){var img=new Image();img.onload=function(){var max=900,s=Math.min(1,max/Math.max(img.width,img.height)),c=document.createElement('canvas');c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);resolve(c.toDataURL('image/jpeg',.68));};img.onerror=reject;img.src=r.result;};r.onerror=reject;r.readAsDataURL(file);});}
+ var oldMark=window.markDelivered||markDelivered;window.markDelivered=async function(){if(!_activeOrder||!_partner)return;var input=document.getElementById('zdp-proof'),file=input&&input.files[0];if(!file){toast('Upload a delivery photo before requesting confirmation.','err');return;}if(file.size>8*1024*1024){toast('Photo must be smaller than 8 MB.','err');return;}try{var data=await compress(file),at=new Date().toISOString();await db.collection('orders').doc(_activeOrder.id).update({deliveryProof:data,deliveryProofFileName:file.name,deliveryProofUploadedAt:at,deliveryProofPartnerId:_partner.uid||_partner.id||'',deliveryProofPartnerName:((_partner.firstName||'')+' '+(_partner.lastName||'')).trim(),updatedAt:at});_activeOrder.deliveryProof=data;toast('Delivery photo uploaded','info');return await oldMark();}catch(e){toast('Could not upload delivery photo: '+e.message,'err');}};
+ var tries=0,t=setInterval(function(){tries++;addUI();if(document.getElementById('zdp-proof')||tries>80)clearInterval(t);},400);
+})();
+</script>
 </body>
 </html>
