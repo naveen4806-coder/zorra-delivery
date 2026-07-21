@@ -906,17 +906,23 @@ function updateUpi(){const v=prompt('Enter UPI ID',load('ls_dp_upi',''));if(v===
 function updateBank(){const v=prompt('Enter bank account label',load('ls_dp_bank',''));if(v===null)return;save('ls_dp_bank',v.trim());updatePartnerPanels();toast('Bank details updated','info');}
 function requestPayout(){const balance=(loadJ('ls_dp_completed',[])||[]).reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0);if(balance<200){toast('Minimum payout is Rs. 200','err');return;}save('ls_dp_last_payout',new Date().toISOString());toast('Payout request submitted','info');}
 function markDoc(key){const docs=loadJ('ls_dp_docs',{})||{};docs[key]=true;save('ls_dp_docs',docs);updatePartnerPanels();toast('Document marked ready','info');}
-function uploadProof(event,key){
+async function uploadProof(event,key){
   const file=event.target.files&&event.target.files[0];
   if(!file)return;
+  if(file.size>650*1024){toast('Document must be smaller than 650 KB so it can be securely saved.','err');event.target.value='';return;}
   const docs=loadJ('ls_dp_docs',{})||{};
-  docs[key]=true;
+  let data='';
+  try{data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('Could not read document'));reader.readAsDataURL(file);});}
+  catch(error){toast(error.message||'Could not read document','err');return;}
+  docs[key]={name:file.name,type:file.type||'application/octet-stream',size:file.size,data:data,uploadedAt:new Date().toISOString()};
   docs[key+'Name']=file.name;
   docs[key+'UploadedAt']=new Date().toISOString();
   save('ls_dp_docs',docs);
   if(_partner){
-    db.collection('delivery_partners').doc(_partner.id).update({proofStatus:hasRequiredProofs()?'submitted':'pending',proofs:docs}).catch(()=>{});
+    try{await db.collection('delivery_partners').doc(_partner.id).update({proofStatus:hasRequiredProofs()?'submitted':'pending',proofs:docs,updatedAt:new Date().toISOString()});}
+    catch(error){toast('Document could not be saved: '+error.message,'err');return;}
   }
+  event.target.value='';
   updatePartnerPanels();
   toast(hasRequiredProofs()?'All proofs uploaded. You can go online now.':'Proof uploaded. Upload remaining proofs.','info');
 }
