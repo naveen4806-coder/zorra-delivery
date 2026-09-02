@@ -634,6 +634,8 @@ body{background:radial-gradient(circle at 90% 0,rgba(243,53,32,.09),transparent 
     <div class="partner-grid">
       <div class="partner-card"><div class="pc-kicker">Available</div><div class="pc-title">Wallet Balance</div><div class="pc-value" id="wallet-balance">Rs. 0</div><div class="pc-sub">Ready for payout request.</div></div>
       <div class="partner-card"><div class="pc-kicker">Pending</div><div class="pc-title">Settlement</div><div class="pc-value" id="wallet-pending">Rs. 0</div><div class="pc-sub">Processed after order checks.</div></div>
+      <div class="partner-card"><div class="pc-kicker">This Month</div><div class="pc-title">Salary Earned</div><div class="pc-value" id="wallet-monthly-earned">Rs. 0</div><div class="pc-sub">Net amount after Zorra's 10% share.</div></div>
+      <div class="partner-card"><div class="pc-kicker">This Month</div><div class="pc-title">Salary Remaining</div><div class="pc-value" id="wallet-monthly-remaining">Rs. 0</div><div class="pc-sub" id="wallet-monthly-paid">Rs. 0 already paid.</div></div>
       <div class="partner-card full">
         <div class="wallet-row"><div class="row-main"><div class="row-title">UPI ID</div><div class="row-sub" id="wallet-upi">Not added yet</div></div><button class="mini-btn" onclick="updateUpi()">Update</button></div>
         <div class="wallet-row"><div class="row-main"><div class="row-title">Bank Account</div><div class="row-sub" id="wallet-bank">Add payout account details</div></div><button class="mini-btn" onclick="updateBank()">Add</button></div>
@@ -865,8 +867,12 @@ function updatePartnerPanels(){
   const completed=loadJ('ls_dp_completed',[])||[];
   const totalEarn=completed.reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0);
   const avg=completed.length?Math.round(totalEarn/completed.length):0;
-  const pending=Math.round(_todayEarnings*.18);
-  const balance=Math.max(0,Math.round(totalEarn-pending));
+  const pending=Number(load('ls_dp_pending_payout','0'))||0;
+  const paid=Number(load('ls_dp_total_paid','0'))||0;
+  const balance=Math.max(0,Math.round(totalEarn-paid-pending));
+  const monthKey=new Date().toISOString().slice(0,7);
+  const monthlyEarned=completed.filter(o=>String(o.deliveredAt||'').slice(0,7)===monthKey).reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0);
+  const monthlyPaid=Number(load('ls_dp_monthly_paid_'+monthKey,'0'))||0;
   const upi=load('ls_dp_upi','');
   const bank=load('ls_dp_bank','');
   const docs=loadJ('ls_dp_docs',{})||{};
@@ -879,6 +885,9 @@ function updatePartnerPanels(){
   set('earn-target',Math.min(100,Math.round((_todayEarnings/500)*100))+'%');
   set('wallet-balance',money(balance));
   set('wallet-pending',money(pending));
+  set('wallet-monthly-earned',money(monthlyEarned));
+  set('wallet-monthly-remaining',money(Math.max(0,monthlyEarned-monthlyPaid)));
+  set('wallet-monthly-paid',money(monthlyPaid)+' already paid.');
   set('wallet-upi',upi||'Not added yet');
   set('wallet-bank',bank||'Add payout account details');
   const payoutBtn=document.getElementById('payout-btn');if(payoutBtn)payoutBtn.disabled=balance<200;
@@ -904,7 +913,15 @@ function updatePartnerPanels(){
 }
 function updateUpi(){const v=prompt('Enter UPI ID',load('ls_dp_upi',''));if(v===null)return;save('ls_dp_upi',v.trim());updatePartnerPanels();toast('UPI details updated','info');}
 function updateBank(){const v=prompt('Enter bank account label',load('ls_dp_bank',''));if(v===null)return;save('ls_dp_bank',v.trim());updatePartnerPanels();toast('Bank details updated','info');}
-function requestPayout(){const balance=(loadJ('ls_dp_completed',[])||[]).reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0);if(balance<200){toast('Minimum payout is Rs. 200','err');return;}save('ls_dp_last_payout',new Date().toISOString());toast('Payout request submitted','info');}
+async function requestPayout(){
+  if(!_partner||!auth.currentUser){toast('Sign in again to request payment.','err');return;}
+  const completed=loadJ('ls_dp_completed',[])||[],earned=completed.reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0),paid=Number(load('ls_dp_total_paid','0'))||0,pending=Number(load('ls_dp_pending_payout','0'))||0,balance=Math.max(0,Math.round(earned-paid-pending));
+  if(balance<200){toast('Minimum payout is Rs. 200','err');return;}
+  const entered=prompt('Enter withdrawal amount (maximum '+money(balance)+')',String(balance));if(entered===null)return;
+  const amount=Math.round(Number(entered));if(!isFinite(amount)||amount<200||amount>balance){toast('Enter a valid amount between Rs. 200 and '+money(balance),'err');return;}
+  const now=new Date().toISOString(),month=now.slice(0,7),name=((_partner.firstName||'')+' '+(_partner.lastName||'')).trim()||'Delivery Partner';
+  try{await db.collection('delivery_payout_requests').add({partnerId:_partner.id,partnerUid:auth.currentUser.uid,partnerName:name,partnerPhone:_partner.phone||'',amount:amount,status:'pending',month:month,upiId:load('ls_dp_upi',''),bankAccount:load('ls_dp_bank',''),requestedAt:now,updatedAt:now});save('ls_dp_pending_payout',String(pending+amount));save('ls_dp_last_payout',now);updatePartnerPanels();toast('Withdrawal request sent to admin','info');}catch(error){toast('Could not request payment: '+error.message,'err');}
+}
 function markDoc(key){const docs=loadJ('ls_dp_docs',{})||{};docs[key]=true;save('ls_dp_docs',docs);updatePartnerPanels();toast('Document marked ready','info');}
 async function uploadProof(event,key){
   const file=event.target.files&&event.target.files[0];
@@ -1674,11 +1691,15 @@ async function onCustomerConfirmed(received){
 
 async function finalizeConfirmedDelivery(){
  if(_deliveryFinalized||!_activeOrder||!_partner)return;
- const earn=calcEarnings(_activeOrder),km=haversine(_activeOrder.shopLat||11.02,_activeOrder.shopLng||76.96,_activeOrder.deliveryLat||11.0168,_activeOrder.deliveryLng||76.9558),now=new Date().toISOString();
- _todayEarnings=Math.round(_todayEarnings+earn);_todayOrders++;_todayKm=Math.round((_todayKm+km)*10)/10;
+ const gross=calcEarnings(_activeOrder),adminShare=Math.round(gross*.10*100)/100,earn=Math.round((gross-adminShare)*100)/100,km=haversine(_activeOrder.shopLat||11.02,_activeOrder.shopLng||76.96,_activeOrder.deliveryLat||11.0168,_activeOrder.deliveryLng||76.9558),now=new Date().toISOString(),month=now.slice(0,7);
+ _todayEarnings=Math.round((_todayEarnings+earn)*100)/100;_todayOrders++;_todayKm=Math.round((_todayKm+km)*10)/10;
  save('ls_dp_earn_today',_todayEarnings+'');save('ls_dp_orders_today',_todayOrders+'');save('ls_dp_km_today',_todayKm+'');
- await db.collection('delivery_partners').doc(_partner.id).update({totalEarnings:firebase.firestore.FieldValue.increment(earn),completedOrders:firebase.firestore.FieldValue.increment(1),activeOrderId:null});
- const completed=loadJ('ls_dp_completed')||[];completed.push({..._activeOrder,deliveredAt:now,partnerEarnings:earn});save('ls_dp_completed',JSON.stringify(completed));_deliveryFinalized=true;
+ const batch=db.batch(),partnerRef=db.collection('delivery_partners').doc(_partner.id),orderRef=db.collection('orders').doc(_activeOrder.id),ledgerRef=db.collection('delivery_wallet_transactions').doc(_activeOrder.id);
+ batch.update(partnerRef,{totalEarnings:firebase.firestore.FieldValue.increment(earn),grossDeliveryEarnings:firebase.firestore.FieldValue.increment(gross),adminDeliveryCommission:firebase.firestore.FieldValue.increment(adminShare),walletBalance:firebase.firestore.FieldValue.increment(earn),completedOrders:firebase.firestore.FieldValue.increment(1),activeOrderId:null,updatedAt:now});
+ batch.update(orderRef,{deliveryGrossEarning:gross,deliveryAdminCommission:adminShare,partnerEarnings:earn,deliverySalaryMonth:month,updatedAt:now});
+ batch.set(ledgerRef,{orderId:_activeOrder.id,partnerId:_partner.id,partnerName:((_partner.firstName||'')+' '+(_partner.lastName||'')).trim(),grossAmount:gross,adminCommission:adminShare,partnerNetAmount:earn,month:month,type:'delivery_credit',createdAt:now});
+ await batch.commit();
+ const completed=loadJ('ls_dp_completed')||[];completed.push({..._activeOrder,deliveredAt:now,deliveryGrossEarning:gross,deliveryAdminCommission:adminShare,partnerEarnings:earn,deliverySalaryMonth:month});save('ls_dp_completed',JSON.stringify(completed));_deliveryFinalized=true;
  document.getElementById('del-total-earn').textContent='₹'+_todayEarnings;document.getElementById('del-total-orders').textContent=_todayOrders;updateStats();
 }
 
@@ -1819,7 +1840,7 @@ function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
 (function(){
  function pricing(order){var subtotal=Number(order.vendorAmount!=null?order.vendorAmount:order.subtotal!=null?order.subtotal:order.total)||0,km=Number(order.deliveryDistanceKm);if(!isFinite(km)||km<=0)km=haversine(order.shopLat||11.02,order.shopLng||76.96,order.deliveryLat||11.0168,order.deliveryLng||76.9558);var scheduled=km<=2?15:km<=4?25:km<=5?40:60,delivery=Number(order.deliveryFee!=null?order.deliveryFee:scheduled),finalTotal=Number(order.customerTotal!=null?order.customerTotal:order.finalTotal!=null?order.finalTotal:subtotal+delivery)||0;return{subtotal:subtotal,delivery:delivery,finalTotal:finalTotal,km:km};}
  function fmt(n){return Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});}
- function block(order){var p=pricing(order),earning=typeof calcEarnings==='function'?calcEarnings(order):p.delivery;return '<div class="zdp-pricing"><div class="zdp-price-line"><span>Delivery distance</span><b>'+fmt(p.km)+' km</b></div><div class="zdp-price-line"><span>Delivery fee</span><b>₹'+fmt(p.delivery)+'</b></div><div class="zdp-price-line"><span>Your delivery earning</span><b>₹'+fmt(earning)+'</b></div><div class="zdp-price-line final"><span>Customer amount</span><b>₹'+fmt(p.finalTotal)+'</b></div><div class="zdp-collect">'+(order.paymentMethod&&order.paymentMethod!=='cod'?'Paid online — do not collect cash':'Collect ₹'+fmt(p.finalTotal)+' · Cash on Delivery')+'</div></div>';}
+ function block(order){var p=pricing(order),gross=typeof calcEarnings==='function'?calcEarnings(order):p.delivery,admin=Math.round(gross*.10*100)/100,net=Math.round((gross-admin)*100)/100;return '<div class="zdp-pricing"><div class="zdp-price-line"><span>Delivery distance</span><b>'+fmt(p.km)+' km</b></div><div class="zdp-price-line"><span>Gross delivery earning</span><b>₹'+fmt(gross)+'</b></div><div class="zdp-price-line"><span>Zorra admin share (10%)</span><b>-₹'+fmt(admin)+'</b></div><div class="zdp-price-line"><span>Added to your wallet</span><b>₹'+fmt(net)+'</b></div><div class="zdp-price-line final"><span>Customer amount</span><b>₹'+fmt(p.finalTotal)+'</b></div><div class="zdp-collect">'+(order.paymentMethod&&order.paymentMethod!=='cod'?'Paid online — do not collect cash':'Collect ₹'+fmt(p.finalTotal)+' · Cash on Delivery')+'</div></div>';}
  window.deliveryOrderPricing=pricing;
  var baseQueue=renderOrdersQueue;renderOrdersQueue=function(orders){baseQueue(orders);setTimeout(function(){document.querySelectorAll('#orders-queue .order-queue-card').forEach(function(card,i){if(orders[i]&&!card.querySelector('.zdp-pricing'))card.insertAdjacentHTML('beforeend',block(orders[i]));});},0);};
  var baseAssigned=renderAssignedBanner;renderAssignedBanner=function(order){baseAssigned(order);setTimeout(function(){var banner=document.querySelector('#assigned-banner-wrap .assigned-banner');if(banner&&!banner.querySelector('.zdp-pricing'))banner.insertAdjacentHTML('beforeend',block(order));},0);};
@@ -1827,5 +1848,13 @@ function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
 })();
 </script>
 <style id="zorra-mobile-launch-performance">html{-webkit-text-size-adjust:100%;text-size-adjust:100%}button,a,[role="button"],input,select{touch-action:manipulation}button,a{-webkit-tap-highlight-color:transparent}@media(max-width:900px){html{scroll-behavior:auto!important}body{overscroll-behavior-y:contain}.modal,.modal-card,.drawer,.sheet,.content{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}.card:hover,button:hover,a:hover{transform:none!important}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}</style>
+<script id="zorra-delivery-wallet-sync">
+(function(){
+ var unsubscribe=null,partnerId='';
+ function start(){if(!_partner||!_partner.id||partnerId===_partner.id)return;if(unsubscribe)unsubscribe();partnerId=_partner.id;unsubscribe=db.collection('delivery_payout_requests').where('partnerId','==',partnerId).onSnapshot(function(snap){var pending=0,paid=0,monthly={};snap.forEach(function(doc){var r=doc.data(),amount=Number(r.amount)||0;if(r.status==='pending')pending+=amount;if(r.status==='approved'){paid+=amount;var month=r.month||String(r.paidAt||'').slice(0,7);monthly[month]=(monthly[month]||0)+amount;}});save('ls_dp_pending_payout',String(pending));save('ls_dp_total_paid',String(paid));Object.keys(monthly).forEach(function(month){save('ls_dp_monthly_paid_'+month,String(monthly[month]));});baseUpdate();},function(error){console.warn('Wallet request sync:',error.message);});}
+ var baseUpdate=window.updatePartnerPanels||updatePartnerPanels;window.updatePartnerPanels=function(){baseUpdate();start();};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){setTimeout(start,500);});else setTimeout(start,500);
+})();
+</script>
 </body>
 </html>
