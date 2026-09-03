@@ -834,7 +834,7 @@ let _nearbyPartnersForTransfer=[];
 let _delMap=null;
 let _riderMarker=null,_shopMarker=null,_destMarker=null,_routeLine=null;
 
-function confirmationPending(){return !!(_activeOrder&&!_deliveryFinalized&&(_activeOrder.deliveryAwaitingCustomer===true||_activeOrder.riderMarkedDeliveredAt));}
+function confirmationPending(){return !!(_activeOrder&&_activeOrder.customerConfirmed!==true&&!_deliveryFinalized&&(_activeOrder.deliveryAwaitingCustomer===true||_activeOrder.riderMarkedDeliveredAt));}
 function setConfirmationLockUI(locked){
   const next=document.querySelector('.btn-next-order'),back=document.querySelector('.btn-back-dash'),inline=document.querySelector('.btn-next-order-inline'),cancel=document.getElementById('cancel-delivery-btn');
   [next,back,inline,cancel].forEach(btn=>{if(btn){btn.disabled=locked;btn.style.opacity=locked?'.45':'';btn.style.cursor=locked?'not-allowed':'';}});
@@ -1655,12 +1655,13 @@ function startListeningForCustomerConfirmation(orderId){
   _deliveredOrderListener=db.collection('orders').doc(orderId).onSnapshot(snap=>{
     if(!snap.exists)return;
     const data=snap.data();
+    if(_activeOrder&&_activeOrder.id===orderId)_activeOrder={..._activeOrder,...data,id:orderId};
     if(data.customerConfirmed===true){
-      onCustomerConfirmed(true);
+      onCustomerConfirmed(true).catch(e=>{console.error('Customer confirmation finalization:',e);setConfirmationLockUI(false);toast('Customer confirmed. Settlement sync will retry when permissions are available.','info');});
     }else if(data.customerConfirmed===false){
-      onCustomerConfirmed(false);
+      onCustomerConfirmed(false).catch(e=>console.error('Customer confirmation update:',e));
     }
-  });
+  },e=>{console.error('Customer confirmation listener:',e);toast('Could not refresh customer confirmation: '+e.message,'err');});
 }
 
 async function onCustomerConfirmed(received){
