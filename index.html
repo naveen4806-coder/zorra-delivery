@@ -825,15 +825,18 @@ function bindPartnerStorage(uid,migrateLegacy=false){
       }
     }catch(e){}
   }
-  _todayEarnings=parseFloat(load('ls_dp_earn_today','0'))||0;
-  _todayOrders=parseInt(load('ls_dp_orders_today','0'))||0;
-  _todayKm=parseFloat(load('ls_dp_km_today','0'))||0;
+  // Today's cards are populated from this partner's Firebase orders.
+  // Never restore these account totals from browser storage.
+  _todayEarnings=0;
+  _todayOrders=0;
+  _todayKm=0;
 }
 
 let _partner=loadJ('ls_dp_profile');
 let _isOnline=false;
 let _partnerLat=null,_partnerLng=null;
 let _lastLocationPush=0;
+let _lastPartnerLocationPush=0;
 let _activeOrder=null;
 let _deliveryStep=0;
 let _handoverListener=null;
@@ -898,7 +901,8 @@ function updatePartnerPanels(){
   const avg=completed.length?Math.round(totalEarn/completed.length):0;
   const pending=Number(load('ls_dp_pending_payout','0'))||0;
   const paid=Number(load('ls_dp_total_paid','0'))||0;
-  const balance=Math.max(0,Math.round(totalEarn-paid-pending));
+  const firebaseWallet=_partner&&_partner.walletBalance!=null?Number(_partner.walletBalance):null;
+  const balance=Math.max(0,Math.round(Number.isFinite(firebaseWallet)?firebaseWallet:totalEarn-paid-pending));
   const monthKey=new Date().toISOString().slice(0,7);
   const monthlyEarned=completed.filter(o=>String(o.deliveredAt||'').slice(0,7)===monthKey).reduce((s,o)=>s+(Number(o.partnerEarnings)||0),0);
   const monthlyPaid=Number(load('ls_dp_monthly_paid_'+monthKey,'0'))||0;
@@ -972,7 +976,22 @@ async function uploadProof(event,key){
   updatePartnerPanels();
   toast(hasRequiredProofs()?'All proofs uploaded. You can go online now.':'Proof uploaded. Upload remaining proofs.','info');
 }
-function toggleBreakMode(){const next=!(load('ls_dp_break','false')==='true');if(next&&confirmationPending()){requireCustomerConfirmation();return;}save('ls_dp_break',next?'true':'false');if(next&&_isOnline){const t=document.getElementById('online-toggle');if(t)t.checked=false;toggleOnline();}updatePartnerPanels();toast(next?'Break started':'Break ended','info');}
+function toggleBreakMode(){
+  const next=!(load('ls_dp_break','false')==='true');
+  if(next&&confirmationPending()){requireCustomerConfirmation();return;}
+  save('ls_dp_break',next?'true':'false');
+  startLocationTracking();
+  if(next){
+    stopOrdersListener();renderOrdersQueue([]);
+    document.getElementById('ot-title').textContent='You are on Break';
+    document.getElementById('ot-sub').textContent='Location remains active. New orders are paused.';
+    document.getElementById('status-bar-txt').textContent='⏸ On break — location sharing remains active';
+  }else if(_isOnline&&hasRequiredProofs()){
+    setOnlineUI(true);listenAvailableOrders();
+  }
+  if(_partner)db.collection('delivery_partners').doc(_partner.id).update({onBreak:next,isOnline:_isOnline,lat:_partnerLat,lng:_partnerLng,locationUpdatedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}).catch(()=>{});
+  updatePartnerPanels();toast(next?'Break started. Location is still active.':'Break ended. Orders resumed.','info');
+}
 function resetTodayStats(){if(!confirm('Reset today earnings, deliveries, and distance on this device?'))return;_todayEarnings=0;_todayOrders=0;_todayKm=0;save('ls_dp_earn_today','0');save('ls_dp_orders_today','0');save('ls_dp_km_today','0');updateStats();toast('Today reset','info');}
 
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById('screen-'+id).classList.add('active');window.scrollTo(0,0);}
@@ -1113,10 +1132,11 @@ function loadDashboard(){
   else{av.textContent=(_partner.firstName||'?')[0].toUpperCase();}
   updateStats();
   listenAssignedOrders();
+  startLocationTracking();
   if(_partner.isOnline&&hasRequiredProofs()){document.getElementById('online-toggle').checked=true;setOnlineUI(true);startLocationTracking();listenAvailableOrders();}
   else if(_partner.isOnline&&!hasRequiredProofs()){document.getElementById('online-toggle').checked=false;setOnlineUI(false);setOnlineStatus(false);}
   if(_partnerWatcher)_partnerWatcher();
-  _partnerWatcher=db.collection('delivery_partners').doc(_partner.id).onSnapshot(snap=>{if(!snap.exists)return;_partner={id:snap.id,...snap.data()};save('ls_dp_profile',JSON.stringify(_partner));});
+  _partnerWatcher=db.collection('delivery_partners').doc(_partner.id).onSnapshot(snap=>{if(!snap.exists)return;_partner={id:snap.id,...snap.data()};save('ls_dp_profile',JSON.stringify(_partner));updatePartnerPanels();});
   renderCompletedList();
   restoreActiveDelivery();
 }
@@ -1140,6 +1160,11 @@ function updateStats(){
 
 function toggleOnline(){
   const on=document.getElementById('online-toggle').checked;
+  if(!on&&_partner){
+    document.getElementById('online-toggle').checked=true;
+    toast('Location must remain active until you sign out or close the app. Use Start Break to pause orders.','err');
+    return;
+  }
   if(!on&&confirmationPending()){document.getElementById('online-toggle').checked=true;requireCustomerConfirmation();return;}
   if(on&&!hasRequiredProofs()){
     document.getElementById('online-toggle').checked=false;
@@ -1150,7 +1175,7 @@ function toggleOnline(){
   }
   setOnlineUI(on);setOnlineStatus(on);
   if(on){startLocationTracking();listenAvailableOrders();}
-  else{stopLocationTracking();stopOrdersListener();renderOrdersQueue([]);}
+  else{stopOrdersListener();renderOrdersQueue([]);}
 }
 function setOnlineUI(on){
   _isOnline=on;
@@ -1168,9 +1193,13 @@ function setOnlineStatus(on){
 
 function startLocationTracking(){
   if(!navigator.geolocation){showLocationGate('Location is not supported on this device or browser.');return;}
+  if(_locWatcher!=null)return;
   _locWatcher=navigator.geolocation.watchPosition(pos=>{
     _partnerLat=pos.coords.latitude;_partnerLng=pos.coords.longitude;
-    if(_isOnline&&_partner)db.collection('delivery_partners').doc(_partner.id).update({lat:_partnerLat,lng:_partnerLng}).catch(()=>{});
+    if(_partner&&Date.now()-_lastPartnerLocationPush>=5000){
+      _lastPartnerLocationPush=Date.now();
+      db.collection('delivery_partners').doc(_partner.id).update({lat:_partnerLat,lng:_partnerLng,locationAccuracy:Math.round(pos.coords.accuracy||0),locationUpdatedAt:new Date().toISOString()}).catch(()=>{});
+    }
     if(_activeOrder&&Date.now()-_lastLocationPush>=5000){
       _lastLocationPush=Date.now();
       db.collection('orders').doc(_activeOrder.id).update({riderLat:_partnerLat,riderLng:_partnerLng,riderLocationAccuracy:Math.round(pos.coords.accuracy||0),riderLocationUpdatedAt:new Date().toISOString()}).catch(()=>{});
@@ -1185,14 +1214,37 @@ function startLocationTracking(){
 }
 function stopLocationTracking(){if(_locWatcher!=null){navigator.geolocation.clearWatch(_locWatcher);_locWatcher=null;}}
 
+function indiaDateKey(value){
+  if(!value)return'';
+  const d=value.toDate?value.toDate():new Date(value);
+  if(isNaN(d))return'';
+  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d);
+  const get=type=>(parts.find(part=>part.type===type)||{}).value||'';
+  return get('year')+'-'+get('month')+'-'+get('day');
+}
+function syncTodayStatsFromFirebase(orders){
+  const today=indiaDateKey(new Date());
+  const completed=(orders||[]).filter(order=>order.status==='Delivered'&&indiaDateKey(order.deliveredAt||order.customerConfirmedAt||order.updatedAt)===today);
+  _todayOrders=completed.length;
+  _todayEarnings=Math.round(completed.reduce((sum,order)=>sum+Number(order.deliveryPartnerPayout!=null?order.deliveryPartnerPayout:order.partnerEarnings||0),0)*100)/100;
+  _todayKm=Math.round(completed.reduce((sum,order)=>{
+    const saved=Number(order.deliveryDistanceKm);
+    if(Number.isFinite(saved)&&saved>=0)return sum+saved;
+    const values=[order.shopLat,order.shopLng,order.deliveryLat,order.deliveryLng].map(Number);
+    return values.every(Number.isFinite)?sum+haversine(values[0],values[1],values[2],values[3]):sum;
+  },0)*10)/10;
+  updateStats();
+}
+
 function listenAssignedOrders(){
   if(!_partner)return;
   if(_assignedListener){_assignedListener();_assignedListener=null;}
   _assignedListener=db.collection('orders')
     .where('deliveryPartnerId','==',_partner.id)
     .onSnapshot(snap=>{
-      const readyDocs=[];
-      snap.forEach(d=>{const o={id:d.id,...d.data()};if(o.status==='Ready for Pickup')readyDocs.push(o);});
+      const allPartnerOrders=[],readyDocs=[];
+      snap.forEach(d=>{const o={id:d.id,...d.data()};allPartnerOrders.push(o);if(o.status==='Ready for Pickup')readyDocs.push(o);});
+      syncTodayStatsFromFirebase(allPartnerOrders);
       if(readyDocs.length&&!_activeOrder){
         const docs=[];snap.forEach(d=>docs.push({id:d.id,...d.data()}));
         readyDocs.sort((a,b)=>new Date(b.assignedAt||b.orderedAt)-new Date(a.assignedAt||a.orderedAt));
