@@ -1040,7 +1040,7 @@ async function restoreActiveDelivery(){
     if(order.deliveryAwaitingCustomer&&order.customerConfirmed!==true){_deliveryFinalized=false;document.getElementById('del-earn-val').textContent=money(calcEarnings(order));document.getElementById('del-total-earn').textContent='Pending';document.getElementById('del-total-orders').textContent=_todayOrders;document.getElementById('customer-confirm-status').classList.add('show');document.getElementById('ccs-title').textContent='Waiting for customer confirmation';document.getElementById('ccs-sub').textContent='This order stays locked until the customer confirms receipt.';setConfirmationLockUI(true);startListeningForCustomerConfirmation(order.id);showScreen('delivered');return;}
     if(order.customerConfirmed===true){_activeOrder.customerConfirmed=true;_activeOrder.deliveryAwaitingCustomer=false;await finalizeConfirmedDelivery();setConfirmationLockUI(false);showScreen('delivered');return;}
     showActiveDelivery(order,true);
-  }catch(e){console.warn('Restore active delivery:',e.message);toast('Could not restore active order: '+e.message,'err');}finally{_restoringActiveOrder=false;}
+  }catch(e){console.warn('Restore active delivery:',e.message);const denied=e&&(e.code==='permission-denied'||/permission|insufficient/i.test(e.message||''));toast(denied?'Assigned order access is not enabled yet. Publish the delivery-partner Firestore read rule, then sign out and sign in again.':'Could not restore active order: '+e.message,'err');}finally{_restoringActiveOrder=false;}
 }
 
 function updateStats(){
