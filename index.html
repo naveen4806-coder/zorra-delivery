@@ -505,6 +505,12 @@ body{background:radial-gradient(circle at 90% 0,rgba(243,53,32,.09),transparent 
       <p>Vendors assign orders directly to you. Get shop location, customer address, and start earning immediately.</p>
     </div>
 
+    <div class="login-card hidden" id="location-gate" style="margin-bottom:16px;text-align:center">
+      <div class="lc-title">📍 Location Required</div>
+      <p id="location-gate-text" style="color:#606779;font-size:13px;line-height:1.55;margin:8px 0 16px">Turn on your device location and allow location permission for this app to continue.</p>
+      <button class="btn-login" onclick="retryLocationAccess()">Check Location Again</button>
+    </div>
+
     <!-- REGISTER -->
     <div class="login-card" id="register-card">
       <div class="lc-title">🆕 Create Partner Account</div>
@@ -797,9 +803,32 @@ const db = firebase.firestore(),auth=firebase.auth();
 async function ensurePartnerAuth(){if(auth.currentUser)return auth.currentUser;throw new Error('Please sign in with your delivery partner email and password.');}
 function partnerAuthMessage(e){const code=e&&e.code||'';if(code==='auth/email-already-in-use')return'An account already exists for this email. Sign in instead.';if(code==='auth/invalid-email')return'Enter a valid email address.';if(code==='auth/weak-password')return'Use a password with at least 6 characters.';if(code==='auth/user-not-found'||code==='auth/wrong-password'||code==='auth/invalid-credential')return'Incorrect email or password.';if(code==='auth/too-many-requests')return'Too many attempts. Wait a moment and try again.';if(code==='auth/network-request-failed')return'Network unavailable. Check your internet connection.';return(e&&e.message||'Authentication failed').replace('Firebase: ','');}
 
-const save=(k,v)=>{try{localStorage.setItem(k,typeof v==='string'?v:JSON.stringify(v));}catch(e){}};
-const load=(k,def='')=>{try{const v=localStorage.getItem(k);return v!=null?v:def;}catch(e){return def;}};
-const loadJ=(k,def=null)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):def;}catch(e){return def;}};
+let _storageUid='';
+const storageKey=k=>k==='ls_dp_profile'||!_storageUid||!k.startsWith('ls_dp_')?k:'ls_dp_user_'+_storageUid+'_'+k.slice(6);
+const save=(k,v)=>{try{localStorage.setItem(storageKey(k),typeof v==='string'?v:JSON.stringify(v));}catch(e){}};
+const load=(k,def='')=>{try{const v=localStorage.getItem(storageKey(k));return v!=null?v:def;}catch(e){return def;}};
+const loadJ=(k,def=null)=>{try{const v=localStorage.getItem(storageKey(k));return v?JSON.parse(v):def;}catch(e){return def;}};
+
+function bindPartnerStorage(uid,migrateLegacy=false){
+  _storageUid=String(uid||'');
+  if(migrateLegacy&&_storageUid){
+    try{
+      const legacyProfile=JSON.parse(localStorage.getItem('ls_dp_profile')||'null');
+      const legacyUid=legacyProfile&&(legacyProfile.id||legacyProfile.uid);
+      if(String(legacyUid||'')===_storageUid){
+        const fixed=['docs','earn_today','orders_today','km_today','completed','pending_payout','total_paid','upi','bank','break','last_payout'];
+        fixed.forEach(suffix=>{const oldKey='ls_dp_'+suffix,newKey='ls_dp_user_'+_storageUid+'_'+suffix;if(localStorage.getItem(newKey)===null&&localStorage.getItem(oldKey)!==null)localStorage.setItem(newKey,localStorage.getItem(oldKey));});
+        for(let i=0;i<localStorage.length;i++){
+          const oldKey=localStorage.key(i);
+          if(oldKey&&oldKey.startsWith('ls_dp_monthly_paid_')){const newKey='ls_dp_user_'+_storageUid+'_'+oldKey.slice(6);if(localStorage.getItem(newKey)===null)localStorage.setItem(newKey,localStorage.getItem(oldKey));}
+        }
+      }
+    }catch(e){}
+  }
+  _todayEarnings=parseFloat(load('ls_dp_earn_today','0'))||0;
+  _todayOrders=parseInt(load('ls_dp_orders_today','0'))||0;
+  _todayKm=parseFloat(load('ls_dp_km_today','0'))||0;
+}
 
 let _partner=loadJ('ls_dp_profile');
 let _isOnline=false;
@@ -813,9 +842,9 @@ let _restoringActiveOrder=false;
 let _selectedVehicle='bicycle';
 let _photoDataURL='';
 let _photoProcessing=false;
-let _todayEarnings=parseFloat(load('ls_dp_earn_today','0'));
-let _todayOrders=parseInt(load('ls_dp_orders_today','0'));
-let _todayKm=parseFloat(load('ls_dp_km_today','0'));
+let _todayEarnings=0;
+let _todayOrders=0;
+let _todayKm=0;
 let _availOrders=[];
 let _ordersListener=null;
 let _assignedListener=null;
@@ -949,6 +978,32 @@ function resetTodayStats(){if(!confirm('Reset today earnings, deliveries, and di
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById('screen-'+id).classList.add('active');window.scrollTo(0,0);}
 function showLogin(){document.getElementById('register-card').classList.add('hidden');document.getElementById('login-card').classList.remove('hidden');}
 function showRegister(){document.getElementById('login-card').classList.add('hidden');document.getElementById('register-card').classList.remove('hidden');}
+function showLocationGate(message){
+  const gate=document.getElementById('location-gate'),text=document.getElementById('location-gate-text');
+  if(text)text.textContent=message||'Turn on your device location and allow location permission for this app to continue.';
+  if(gate)gate.classList.remove('hidden');
+  showScreen('login');
+}
+function hideLocationGate(){const gate=document.getElementById('location-gate');if(gate)gate.classList.add('hidden');}
+function requireLocationAccess(errorElement){
+  return new Promise(resolve=>{
+    if(!navigator.geolocation){const msg='Location is not supported on this device or browser.';showLocationGate(msg);if(errorElement){errorElement.textContent=msg;errorElement.classList.add('show');}resolve(false);return;}
+    navigator.geolocation.getCurrentPosition(pos=>{
+      _partnerLat=pos.coords.latitude;_partnerLng=pos.coords.longitude;hideLocationGate();
+      if(errorElement)errorElement.classList.remove('show');
+      resolve(true);
+    },error=>{
+      const denied=error&&error.code===1;
+      const msg=denied?'Location permission is blocked. Turn on device Location, allow location permission for this app in Settings, then try again.':'Your current location could not be found. Turn on GPS/location and try again.';
+      showLocationGate(msg);if(errorElement){errorElement.textContent=msg;errorElement.classList.add('show');}resolve(false);
+    },{enableHighAccuracy:true,timeout:12000,maximumAge:0});
+  });
+}
+async function retryLocationAccess(){
+  const ok=await requireLocationAccess();if(!ok)return;
+  toast('Location enabled. You can continue.','info');
+  if(auth.currentUser&&!auth.currentUser.isAnonymous)restorePartnerSession(auth.currentUser);
+}
 function selectVehicle(v,el){_selectedVehicle=v;document.querySelectorAll('.veh-btn').forEach(b=>b.classList.remove('selected'));el.classList.add('selected');}
 async function handlePhotoUpload(e){
   const input=e.target,file=input.files&&input.files[0];if(!file)return;
@@ -981,9 +1036,41 @@ async function registerPartner(){
   if(password.length<6){errEl.textContent='Password must contain at least 6 characters.';errEl.classList.add('show');return;}
   if(password!==confirmPassword){errEl.textContent='Passwords do not match.';errEl.classList.add('show');return;}
   errEl.classList.remove('show');
+  if(!await requireLocationAccess(errEl))return;
   let createdUser=null;
-  try{_creatingPartnerAccount=true;const cred=await auth.createUserWithEmailAndPassword(email,password);createdUser=cred.user;await cred.user.updateProfile({displayName:fname+' '+lname});const profile={uid:cred.user.uid,firstName:fname,lastName:lname,email,phone,vehicle:_selectedVehicle,photo:_photoDataURL,rating:5.0,completedOrders:0,totalEarnings:0,isOnline:false,accountStatus:'active',proofStatus:'pending',lat:null,lng:null,activeOrderId:null,joinedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};await db.collection('delivery_partners').doc(cred.user.uid).set(profile);_partner={id:cred.user.uid,...profile};save('ls_dp_profile',JSON.stringify(_partner));toast('Account created successfully.');loadDashboard();showScreen('dashboard');showDashPanel('docs');}
-  catch(e){if(createdUser)await createdUser.delete().catch(()=>auth.signOut());errEl.textContent=partnerAuthMessage(e);errEl.classList.add('show');}
+  const makeProfile=uid=>({uid:uid,firstName:fname,lastName:lname,email:email,phone:phone,vehicle:_selectedVehicle,photo:_photoDataURL,rating:5.0,completedOrders:0,totalEarnings:0,isOnline:false,accountStatus:'active',proofStatus:'pending',lat:null,lng:null,activeOrderId:null,joinedAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+  try{
+    _creatingPartnerAccount=true;
+    const cred=await auth.createUserWithEmailAndPassword(email,password);createdUser=cred.user;
+    await cred.user.updateProfile({displayName:fname+' '+lname});
+    const profile=makeProfile(cred.user.uid);
+    await db.collection('delivery_partners').doc(cred.user.uid).set(profile);
+    _partner={id:cred.user.uid,...profile};bindPartnerStorage(cred.user.uid,false);save('ls_dp_profile',JSON.stringify(_partner));
+    toast('Account created successfully.');loadDashboard();showScreen('dashboard');showDashPanel('docs');
+  }
+  catch(e){
+    if(e&&e.code==='auth/email-already-in-use'){
+      try{
+        const cred=await auth.signInWithEmailAndPassword(email,password);
+        const partnerRef=db.collection('delivery_partners').doc(cred.user.uid),partnerDoc=await partnerRef.get();
+        if(partnerDoc.exists){
+          _partner={id:partnerDoc.id,...partnerDoc.data()};bindPartnerStorage(cred.user.uid,true);save('ls_dp_profile',JSON.stringify(_partner));
+          toast('Account already registered. Signed in successfully.','info');loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');
+        }else{
+          await cred.user.updateProfile({displayName:fname+' '+lname});
+          const profile=makeProfile(cred.user.uid);
+          await partnerRef.set(profile);
+          _partner={id:cred.user.uid,...profile};bindPartnerStorage(cred.user.uid,false);save('ls_dp_profile',JSON.stringify(_partner));
+          toast('Delivery partner registration completed.','info');loadDashboard();showScreen('dashboard');showDashPanel('docs');
+        }
+        return;
+      }catch(recoveryError){
+        errEl.textContent=partnerAuthMessage(recoveryError);errEl.classList.add('show');return;
+      }
+    }
+    if(createdUser)await createdUser.delete().catch(()=>auth.signOut());
+    errEl.textContent=partnerAuthMessage(e);errEl.classList.add('show');
+  }
   finally{_creatingPartnerAccount=false;}
 }
 
@@ -993,11 +1080,12 @@ async function loginPartner(){
   const errEl=document.getElementById('login-err');
   if(!email||!password){errEl.textContent='Enter your email address and password.';errEl.classList.add('show');return;}
   errEl.classList.remove('show');
+  if(!await requireLocationAccess(errEl))return;
   try{
     const cred=await auth.signInWithEmailAndPassword(email,password),doc=await db.collection('delivery_partners').doc(cred.user.uid).get();
-    if(!doc.exists){await auth.signOut();errEl.textContent='This account is not registered as a delivery partner.';errEl.classList.add('show');return;}
+    if(!doc.exists){await auth.signOut();errEl.textContent='Your login exists, but delivery registration is incomplete. Open Create Account and submit the same email and password to finish registration.';errEl.classList.add('show');return;}
     if(doc.data().accountStatus==='disabled'){await auth.signOut();errEl.textContent='This delivery partner account has been disabled.';errEl.classList.add('show');return;}
-    _partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));
+    _partner={id:doc.id,...doc.data()};bindPartnerStorage(cred.user.uid,true);save('ls_dp_profile',JSON.stringify(_partner));
     toast('Welcome back, '+_partner.firstName+'!');loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');
   }catch(e){errEl.textContent=partnerAuthMessage(e);errEl.classList.add('show');}
 }
@@ -1006,13 +1094,13 @@ async function logout(){
   if(!requireCustomerConfirmation())return;
   if(_isOnline)setOnlineStatus(false);
   stopListeners();
-  _partner=null;_isOnline=false;_assignedOrder=null;
+  _partner=null;_isOnline=false;_assignedOrder=null;bindPartnerStorage('',false);
   localStorage.removeItem('ls_dp_profile');
   await auth.signOut().catch(()=>{});
   showScreen('login');
 }
 
-async function restorePartnerSession(user){try{if(!user){_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}if(user.isAnonymous){await auth.signOut();_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}const doc=await db.collection('delivery_partners').doc(user.uid).get();if(!doc.exists||doc.data().accountStatus==='disabled'){await auth.signOut();_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');return;}_partner={id:doc.id,...doc.data()};save('ls_dp_profile',JSON.stringify(_partner));loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');if(_partner.isOnline&&hasRequiredProofs()){const tog=document.getElementById('online-toggle');if(tog)tog.checked=true;}}catch(e){console.warn('Partner session:',e.message);_partner=null;localStorage.removeItem('ls_dp_profile');showScreen('login');}}
+async function restorePartnerSession(user){try{if(!user){_partner=null;bindPartnerStorage('',false);localStorage.removeItem('ls_dp_profile');showScreen('login');return;}if(user.isAnonymous){await auth.signOut();_partner=null;bindPartnerStorage('',false);localStorage.removeItem('ls_dp_profile');showScreen('login');return;}if(!await requireLocationAccess())return;const doc=await db.collection('delivery_partners').doc(user.uid).get();if(!doc.exists||doc.data().accountStatus==='disabled'){await auth.signOut();_partner=null;bindPartnerStorage('',false);localStorage.removeItem('ls_dp_profile');showScreen('login');return;}_partner={id:doc.id,...doc.data()};bindPartnerStorage(user.uid,true);save('ls_dp_profile',JSON.stringify(_partner));loadDashboard();showScreen('dashboard');if(!hasRequiredProofs())showDashPanel('docs');if(_partner.isOnline&&hasRequiredProofs()){const tog=document.getElementById('online-toggle');if(tog)tog.checked=true;}}catch(e){console.warn('Partner session:',e.message);_partner=null;bindPartnerStorage('',false);localStorage.removeItem('ls_dp_profile');showScreen('login');}}
 auth.onAuthStateChanged(user=>{if(!_creatingPartnerAccount)restorePartnerSession(user);});
 
 function loadDashboard(){
@@ -1079,7 +1167,7 @@ function setOnlineStatus(on){
 }
 
 function startLocationTracking(){
-  if(!navigator.geolocation)return;
+  if(!navigator.geolocation){showLocationGate('Location is not supported on this device or browser.');return;}
   _locWatcher=navigator.geolocation.watchPosition(pos=>{
     _partnerLat=pos.coords.latitude;_partnerLng=pos.coords.longitude;
     if(_isOnline&&_partner)db.collection('delivery_partners').doc(_partner.id).update({lat:_partnerLat,lng:_partnerLng}).catch(()=>{});
@@ -1088,7 +1176,12 @@ function startLocationTracking(){
       db.collection('orders').doc(_activeOrder.id).update({riderLat:_partnerLat,riderLng:_partnerLng,riderLocationAccuracy:Math.round(pos.coords.accuracy||0),riderLocationUpdatedAt:new Date().toISOString()}).catch(()=>{});
     }
     if(_delMap&&_riderMarker)_riderMarker.setLatLng([_partnerLat,_partnerLng]);
-  },()=>{_partnerLat=11.0168;_partnerLng=76.9558;},{enableHighAccuracy:true,timeout:10000,maximumAge:5000});
+  },()=>{
+    _partnerLat=null;_partnerLng=null;
+    const toggle=document.getElementById('online-toggle');if(toggle)toggle.checked=false;
+    setOnlineUI(false);setOnlineStatus(false);stopOrdersListener();renderOrdersQueue([]);
+    showLocationGate('Location was turned off or permission was removed. Enable it in Settings to continue.');
+  },{enableHighAccuracy:true,timeout:10000,maximumAge:5000});
 }
 function stopLocationTracking(){if(_locWatcher!=null){navigator.geolocation.clearWatch(_locWatcher);_locWatcher=null;}}
 
