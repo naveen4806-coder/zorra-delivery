@@ -649,6 +649,7 @@ body{background:radial-gradient(circle at 90% 0,rgba(243,53,32,.09),transparent 
         <div class="wallet-row"><div class="row-main"><div class="row-title">Request Payout</div><div class="row-sub">Minimum payout is Rs. 200.</div></div><button class="mini-btn primary" id="payout-btn" onclick="requestPayout()">Payout</button></div>
       </div>
     </div>
+<section class="partner-card" style="margin:16px 20px" aria-labelledby="owner-settle-title"><div class="pc-title" id="owner-settle-title">Settle Amount to Owner</div><p class="pc-sub">After paying the owner, submit the payment reference for admin verification. Pending Settlement reduces only after approval.</p><div id="owner-settlement-list">Loading settlement requests…</div></section>
   </div>
 
   <div class="dash-panel" id="panel-docs">
@@ -2002,6 +2003,20 @@ function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
 function start(){const uid=_partner&&_partner.id||'';if(uid===financeUid)return;stops.forEach(stop=>stop());stops=[];financeUid=uid;financeOrders=[];financeLedger=[];financeRequests=[];financeReady={orders:false,ledger:false,requests:false};if(!uid)return;
 [['delivery_wallet_transactions','ledger'],['delivery_payout_requests','requests']].forEach(([collection,key])=>{stops.push(db.collection(collection).where('partnerId','==',uid).onSnapshot(snap=>{if(financeUid!==uid)return;const rows=[];snap.forEach(d=>rows.push({...d.data(),id:d.id}));if(key==='ledger')financeLedger=rows;else financeRequests=rows;financeReady[key]=true;base();},error=>{if(financeUid!==uid)return;financeReady[key]=false;base();console.warn('Finance sync:',error.message);}));});}
 updatePartnerPanels=function(){start();base();};auth.onAuthStateChanged(()=>{financeUid='__reset__';start();base();});
+})();
+</script>
+<script id="owner-settlement-partner">
+(function(){let unsubscribe=null,uid='',requests=[],loaded=false,busy=false;
+const fmt=n=>money(n);function render(){const host=document.getElementById('owner-settlement-list');if(!host)return;host.replaceChildren();if(!loaded||!financeReady.orders||!financeReady.ledger){host.textContent='Settlement records unavailable or loading. Please check your connection and access.';return;}
+const orders=financeTotals().completed.filter(o=>['cod','cash','cash on delivery'].includes(String(o.paymentMethod||'').toLowerCase()));
+for(const o of orders){const row=financeLedger.find(x=>x.type==='delivery_credit'&&(x.orderId===o.id||x.id===o.id));const earnings=row?Number(row.partnerNetAmount)||0:Number(o.deliveryPartnerPayout??o.partnerEarnings??fullDeliveryFee(o))||0;const due=Math.round(Math.max(0,Number(o.customerTotal??o.finalTotal??o.total??0)-earnings-(Number(o.ownerRemittedAmount)||0))*100)/100;const req=requests.find(r=>r.orderId===o.id);if(due<=0&&!req)continue;
+const box=document.createElement('div');box.className='wallet-row';const info=document.createElement('div');info.className='row-main';const title=document.createElement('div');title.className='row-title';title.textContent=(o.shopName||'Shop')+' · '+fmt(due)+' pending';const desc=document.createElement('div');desc.className='row-sub';desc.textContent='Order '+o.id+' · '+(req?(req.status==='approved'?'Settled to owner — verified by admin':req.status==='pending'?'Awaiting admin verification':('Rejected: '+(req.adminNote||'Please check the payment reference'))):'Not submitted');info.append(title,desc);box.append(info);
+if(due>0&&(!req||req.status==='rejected')){const btn=document.createElement('button');btn.className='mini-btn primary';btn.textContent=req?'Resubmit for Verification':'I Paid Owner';btn.disabled=busy;btn.onclick=()=>submit(o,due,earnings,req);box.append(btn);}host.append(box);}
+if(!host.children.length)host.textContent='No owner settlements pending.';
+}
+async function submit(o,amount,earnings,previous){if(busy||!auth.currentUser||!_partner)return;const reference=prompt('Enter the payment reference or cash receipt number for '+fmt(amount)+' paid to the owner:');if(reference===null)return;if(!reference.trim()){toast('A payment reference or receipt number is required.','err');return;}busy=true;render();const partnerId=_partner.id;try{const ref=db.collection('delivery_owner_settlements').doc(partnerId+'_'+o.id);await db.runTransaction(async tx=>{const snap=await tx.get(ref);if(snap.exists&&snap.data().status!=='rejected')throw Error('This settlement has already been submitted.');tx.set(ref,{partnerId,partnerUid:auth.currentUser.uid,partnerName:((_partner.firstName||'')+' '+(_partner.lastName||'')).trim(),orderId:o.id,shopName:o.shopName||'',amount,deliveryEarnings:earnings,paymentReference:reference.trim().slice(0,200),status:'pending',requestedAt:new Date().toISOString()});});toast('Sent to admin. Settlement stays pending until verified.','info');}catch(e){toast('Could not submit settlement: '+e.message,'err');}finally{busy=false;render();}}
+function start(){const next=_partner&&_partner.id||'';if(uid===next)return;if(unsubscribe)unsubscribe();uid=next;requests=[];loaded=false;if(!uid){render();return;}const expected=uid;unsubscribe=db.collection('delivery_owner_settlements').where('partnerId','==',uid).onSnapshot(snap=>{if(uid!==expected)return;requests=snap.docs.map(d=>({...d.data(),id:d.id}));loaded=true;render();},()=>{loaded=false;render();});}
+const base=updatePartnerPanels;updatePartnerPanels=function(){base();start();render();};auth.onAuthStateChanged(()=>{uid='__reset__';start();});
 })();
 </script>
 </body>
