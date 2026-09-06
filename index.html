@@ -9,7 +9,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-functions-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1662,7 +1661,7 @@ function showActiveDelivery(order,isAssigned){
   setTimeout(()=>initDeliveryMap(order),150);
 }
 
-function listenForShopHandover(orderId){if(_handoverListener){_handoverListener();_handoverListener=null;}_handoverListener=db.collection('orders').doc(orderId).onSnapshot(snap=>{if(!snap.exists||!_activeOrder||_activeOrder.id!==orderId)return;const latest={id:snap.id,...snap.data()};_activeOrder={..._activeOrder,...latest};document.querySelectorAll("#active-product-card .zdp-collect").forEach(n=>n.textContent=ZorraPayment.collectionText(latest));if(latest.shopHandoverConfirmed&&_deliveryStep<2){_deliveryStep=2;updateStepsUI(2);const btn=document.getElementById('main-action-btn');btn.disabled=false;btn.style.opacity='1';btn.textContent="I've Reached the Customer's Location";document.getElementById('active-status-pill').textContent='Out for Delivery';toast('Shop confirmed the handover. Head to the customer.');}},e=>console.warn('Handover listener:',e));}
+function listenForShopHandover(orderId){if(_handoverListener){_handoverListener();_handoverListener=null;}_handoverListener=db.collection('orders').doc(orderId).onSnapshot(snap=>{if(!snap.exists||!_activeOrder||_activeOrder.id!==orderId)return;const latest={id:snap.id,...snap.data()};_activeOrder={..._activeOrder,...latest};if(latest.shopHandoverConfirmed&&_deliveryStep<2){_deliveryStep=2;updateStepsUI(2);const btn=document.getElementById('main-action-btn');btn.disabled=false;btn.style.opacity='1';btn.textContent="I've Reached the Customer's Location";document.getElementById('active-status-pill').textContent='Out for Delivery';toast('Shop confirmed the handover. Head to the customer.');}},e=>console.warn('Handover listener:',e));}
 
 function openNav(lat,lng){window.open('https://www.google.com/maps/dir/?api=1&destination='+lat+','+lng+'&travelmode=driving','_blank');}
 const STEP_LABELS=['Head to Shop','Shop Handover','Delivering','Delivered'];
@@ -1977,7 +1976,7 @@ function capitalise(s){return s?s[0].toUpperCase()+s.slice(1):'';}
  function pricing(order){var km=n(order.deliveryDistanceKm);if(!km)km=haversine(order.shopLat||11.02,order.shopLng||76.96,order.deliveryLat||11.0168,order.deliveryLng||76.9558);var slab=getDeliveryPricing(km),partner=fullDeliveryFee(order),fee=partner,margin=0,finalTotal=n(order.customerTotal!=null?order.customerTotal:order.finalTotal!=null?order.finalTotal:order.total);return{km:km,deliveryFee:fee,partnerPayout:partner,zorraDeliveryMargin:margin,finalTotal:finalTotal,serviceable:slab.serviceable};}
  window.ZorraPricing={getDeliveryPricing:getDeliveryPricing};window.deliveryOrderPricing=pricing;
  function fmt(v){return n(v).toLocaleString('en-IN',{maximumFractionDigits:2});}
- function block(order){var p=pricing(order),cod=String(order.paymentMethod||'').toLowerCase()==='cod';return '<div class="zdp-pricing"><div class="zdp-price-line"><span>Delivery distance</span><b>'+p.km.toFixed(1)+' km</b></div><div class="zdp-price-line"><span>Delivery earnings</span><b>₹'+fmt(p.partnerPayout)+'</b></div><div class="zdp-price-line final"><span>Total customer bill</span><b>₹'+fmt(p.finalTotal)+'</b></div><div class="zdp-collect">'+(cod?'Collect ₹'+fmt(p.finalTotal)+' from customer · Your payout is ₹'+fmt(p.partnerPayout):ZorraPayment.collectionText(order)+' · Your payout is ₹'+fmt(p.partnerPayout))+'</div></div>';}
+ function block(order){var p=pricing(order),cod=String(order.paymentMethod||'').toLowerCase()==='cod';return '<div class="zdp-pricing"><div class="zdp-price-line"><span>Delivery distance</span><b>'+p.km.toFixed(1)+' km</b></div><div class="zdp-price-line"><span>Delivery earnings</span><b>₹'+fmt(p.partnerPayout)+'</b></div><div class="zdp-price-line final"><span>Total customer bill</span><b>₹'+fmt(p.finalTotal)+'</b></div><div class="zdp-collect">'+(cod?'Collect ₹'+fmt(p.finalTotal)+' from customer · Your payout is ₹'+fmt(p.partnerPayout):'Paid online — collect no cash · Your payout is ₹'+fmt(p.partnerPayout))+'</div></div>';}
  var q=renderOrdersQueue;renderOrdersQueue=function(orders){q(orders);setTimeout(function(){document.querySelectorAll('#orders-queue .order-queue-card').forEach(function(card,i){var old=card.querySelector('.zdp-pricing');if(old)old.remove();if(orders[i])card.insertAdjacentHTML('beforeend',block(orders[i]));});},0);};var a=renderAssignedBanner;renderAssignedBanner=function(order){a(order);setTimeout(function(){var banner=document.querySelector('#assigned-banner-wrap .assigned-banner');if(banner){var old=banner.querySelector('.zdp-pricing');if(old)old.remove();banner.insertAdjacentHTML('beforeend',block(order));}},0);};var active=showActiveDelivery;showActiveDelivery=function(order,isAssigned){active(order,isAssigned);setTimeout(function(){var card=document.getElementById('active-product-card');if(card){var old=card.querySelector('.zdp-pricing');if(old)old.remove();card.insertAdjacentHTML('beforeend',block(order));}},0);};
  let settling=false;
  finalizeConfirmedDelivery=async function(){
@@ -2020,7 +2019,5 @@ function start(){const next=_partner&&_partner.id||'';if(uid===next)return;if(un
 const base=updatePartnerPanels;updatePartnerPanels=function(){base();start();render();};auth.onAuthStateChanged(()=>{uid='__reset__';start();});
 })();
 </script>
-<script src="payment-display.js"></script>
-<script src="payment-delivery.js"></script>
 </body>
 </html>
